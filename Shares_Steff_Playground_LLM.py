@@ -7,9 +7,19 @@ import requests
 import json
 import os
 import time
+from threading import Lock
 
-# --- Function to Check Ollama Server Readiness ---
+# --- Lock for sequential LLM calls ---
+llm_lock = Lock()
+
+# --- Check if running on Streamlit Cloud ---
+def is_streamlit_cloud():
+    return os.getenv('STREAMLIT_CLOUD') is not None or 'streamlit' in os.getenv('SERVER_SOFTWARE', '').lower()
+
+# --- Check Ollama Server Readiness (local only) ---
 def check_ollama_server(ollama_host):
+    if is_streamlit_cloud():
+        return False
     try:
         response = requests.get(f"http://{ollama_host}/api/tags", timeout=5)
         response.raise_for_status()
@@ -17,58 +27,70 @@ def check_ollama_server(ollama_host):
     except:
         return False
 
-# --- Function to Get LLM Explanation (using Ollama local server) ---
+# --- Warm Up Ollama Server (local only) ---
+def warmup_ollama_server(ollama_host):
+    if is_streamlit_cloud():
+        return
+    try:
+        response = requests.post(
+            f"http://{ollama_host}/api/generate",
+            json={"model": "gemma:2b", "prompt": "Warmup test", "stream": False},
+            timeout=10
+        )
+        response.raise_for_status()
+    except:
+        pass
+
+# --- Get LLM Explanation (local only) ---
 def get_llm_explanation(metric_name, data_dict):
+    if is_streamlit_cloud():
+        st.info("LLM explanations are unavailable on Streamlit Cloud. Using rule-based explanations.")
+        return None
     ollama_host = os.getenv('OLLAMA_HOST', '127.0.0.1:11434')
     ollama_url = f"http://{ollama_host}/api/generate"
     prompt = f"""
-    You are a financial investment analyst providing insights for stock analysis.
-    Generate a concise, conversational explanation for the following stock metric: {metric_name}.
+    Explain '{metric_name}' in 80-120 words.
     Data: {json.dumps(data_dict, indent=2)}
-    Include:
-    - A brief description of the metric and its significance in investment analysis.
-    - Key insights, highlighting the top and bottom performers with explanations.
-    - LBS Bina’s performance relative to the group average, and what it implies for investors.
-    Ensure accuracy, use only the provided data, and keep it professional yet accessible.
-    Limit the response to 150 words.
+    - Define the metric.
+    - Note top/bottom performers.
+    - Compare LBS Bina to the average.
+    Keep it clear.
     """
     max_retries = 3
-    for attempt in range(max_retries):
+    with llm_lock:
         if not check_ollama_server(ollama_host):
-            if attempt < max_retries - 1:
-                st.warning(f"Ollama server not ready on {ollama_host}. Retrying in 3 seconds...")
-                time.sleep(3)
-                continue
-            st.warning(f"Ollama server not running on {ollama_host}. Start it by opening the Ollama app (check system tray) or running `ollama serve` in a terminal. Ensure `llama3` is installed (`ollama pull llama3`). Falling back to default explanation.")
-            return None
-        try:
-            response = requests.post(
-                ollama_url,
-                json={
-                    "model": "llama3",  # Change to 'gemma:2b' for low-resource systems
-                    "prompt": prompt,
-                    "stream": False
-                },
-                timeout=30  # Increased timeout
-            )
-            response.raise_for_status()
-            return response.json().get("response", "Error generating explanation")
-        except requests.exceptions.ReadTimeout:
-            if attempt < max_retries - 1:
-                st.warning(f"Ollama request timed out on {ollama_host}. Retrying in 3 seconds...")
-                time.sleep(3)
-                continue
-            st.warning(f"Ollama server timed out on {ollama_host} after {max_retries} attempts. Ensure sufficient system resources (RAM/GPU) or try `gemma:2b` (`ollama pull gemma:2b`). Falling back to default explanation.")
-            return None
-        except requests.exceptions.ConnectionError:
-            st.warning(f"Ollama server not running on {ollama_host}. Start it by opening the Ollama app or running `ollama serve`. Ensure `llama3` is installed (`ollama pull llama3`). Falling back to default explanation.")
-            return None
-        except requests.exceptions.HTTPError as e:
-            st.warning(f"Ollama error: {str(e)}. Check if `llama3` is installed (`ollama list`) or run `ollama pull llama3`. Falling back to default explanation.")
-            return None
-        except Exception as e:
-            st.warning(f"Unexpected error with Ollama: {str(e)}. Falling back to default explanation.")
-            return None
+            st.warning(f"Ollama server not ready on {ollama_host}. Warming up and retrying...")
+            warmup_ollama_server(ollama_host)
+            time.sleep(3)
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    ollama_url,
+                    json={
+                        "model": "gemma:2b",  # Use 'llama3' if system supports it
+                        "prompt": prompt,
+                        "stream": False
+                    },
+                    timeout=90
+                )
+                response.raise_for_status()
+                return response.json().get("response", "Error generating explanation")
+            except requests.exceptions.ReadTimeout:
+                if attempt < max_retries - 1:
+                    st.warning(f"Ollama timed out on {ollama_host}. Retrying in 3 seconds...")
+                    time.sleep(3)
+                    continue
+                st.warning(f"Ollama timed out on {ollama_host} after {max_retries} attempts. Try closing apps or using 'gemma:2b' (`ollama pull gemma:2b`). Falling back to default explanation.")
+                return None
+            except requests.exceptions.ConnectionError:
+                st.warning(f"Ollama server not running on {ollama_host}. Start it via the Ollama app or `ollama serve`. Ensure 'gemma:2b' is installed (`ollama pull gemma:2b`). Falling back to default explanation.")
+                return None
+            except requests.exceptions.HTTPError as e:
+                st.warning(f"Ollama error: {str(e)}. Check if 'gemma:2b' is installed (`ollama list`) or run `ollama pull gemma:2b`. Falling back to default explanation.")
+                return None
+            except Exception as e:
+                st.warning(f"Unexpected error with Ollama: {str(e)}. Falling back to default explanation.")
+                return None
 
 # --- Fetch Data Function ---
 def fetch_data(ticker, start, end):
@@ -109,6 +131,10 @@ def main():
 
     if st.button("Get Historical Data"):
         try:
+            # Warm up Ollama server (local only)
+            if not is_streamlit_cloud():
+                warmup_ollama_server(os.getenv('OLLAMA_HOST', '127.0.0.1:11434'))
+
             # Fetch base company data
             df_base = fetch_data(base_ticker, start, end + pd.Timedelta(days=1))
             df_base["Company"] = "LBS Bina"
@@ -163,7 +189,7 @@ def main():
             )
 
             # --- Automated Analysis & Explanations ---
-            st.subheader("🤖 Automated Analysis & Explanations (Powered by Local LLM)")
+            st.subheader("🤖 Automated Analysis & Explanations")
 
             # Closing Price Insights
             st.markdown("### Closing Price Explanation")
@@ -171,15 +197,11 @@ def main():
             last_closes = df_all.groupby('Company')['Close'].last()
             pct_changes = ((last_closes - first_closes) / first_closes * 100).sort_values(ascending=False)
             pct_changes_dict = pct_changes.to_dict()
-            explanation_closing = get_llm_explanation("Percentage Change in Closing Prices", pct_changes_dict)
+            explanation_closing = get_llm_explanation("Closing Price Change (%)", pct_changes_dict)
             if explanation_closing:
                 st.write(explanation_closing)
             else:
-                # Fallback to rule-based explanation
-                st.write("This section analyzes the daily closing prices for LBS Bina and selected competitors over the chosen period. Key insights:")
-                st.write("- **Trends**: Upward price movements indicate growth, while downward or flat trends suggest declines or stability.")
-                st.write("- **Comparisons**: Use LBS Bina as a baseline to see how competitors perform relative to it.")
-                st.write("Percentage Change Over the Period (from start to end date):")
+                st.write("This section analyzes the percentage change in closing prices for LBS Bina and competitors over the selected period:")
                 for company, pct in pct_changes.items():
                     direction = "gain" if pct > 0 else "loss"
                     st.write(f"- **{company}**: {pct:.2f}% {direction}.")
@@ -187,49 +209,45 @@ def main():
                 top_gain = pct_changes.max()
                 bottom_performer = pct_changes.idxmin()
                 bottom_performance = pct_changes.min()
-                st.write(f"The top performer is **{top_gainer}** with a {top_gain:.2f}% gain, suggesting strong market confidence or positive developments.")
-                st.write(f"The weakest performer is **{bottom_performer}** with a {bottom_performance:.2f}% change, which might indicate challenges or market headwinds.")
+                st.write(f"**{top_gainer}** led with a {top_gain:.2f}% gain, indicating strong market confidence.")
+                st.write(f"**{bottom_performer}** had a {bottom_performance:.2f}% change, suggesting challenges.")
                 if 'LBS Bina' in pct_changes:
                     base_pct = pct_changes['LBS Bina']
                     avg_pct = pct_changes.mean()
                     performance_note = "outperformed" if base_pct > avg_pct else "underperformed" if base_pct < avg_pct else "matched"
-                    st.write(f"LBS Bina's performance ({base_pct:.2f}%) {performance_note} the group average ({avg_pct:.2f}%), providing context on its competitive standing.")
+                    st.write(f"LBS Bina ({base_pct:.2f}%) {performance_note} the average ({avg_pct:.2f}%).")
 
             # Volume Insights
             st.markdown("### Volume Explanation")
             avg_volumes = df_all.groupby('Company')['Volume'].mean().sort_values(ascending=False)
             max_volumes = df_all.groupby('Company')['Volume'].max()
             volumes_dict = {"Average Volumes": avg_volumes.to_dict(), "Max Volumes": max_volumes.to_dict()}
-            explanation_volume = get_llm_explanation("Trading Volumes (Average and Max)", volumes_dict)
+            explanation_volume = get_llm_explanation("Trading Volume", volumes_dict)
             if explanation_volume:
                 st.write(explanation_volume)
             else:
-                # Fallback to rule-based explanation
-                st.write("This section examines trading volumes over time. Volume spikes often signal high interest, news events, or market reactions. Steady volumes suggest consistent trading activity.")
-                st.write("Average Trading Volumes:")
+                st.write("This section examines trading volumes over time:")
                 for company, vol in avg_volumes.items():
-                    st.write(f"- **{company}**: {vol:,.0f} shares per day on average.")
+                    st.write(f"- **{company}**: {vol:,.0f} shares/day (avg).")
                 highest_avg_vol = avg_volumes.idxmax()
                 highest_max_vol = max_volumes.idxmax()
-                st.write(f"The stock with the highest average volume is **{highest_avg_vol}**, implying greater liquidity and investor attention.")
-                st.write(f"The largest single-day volume spike was for **{highest_max_vol}** at {max_volumes[highest_max_vol]:,.0f} shares, potentially tied to a major event.")
+                st.write(f"**{highest_avg_vol}** had the highest average volume, indicating high liquidity.")
+                st.write(f"**{highest_max_vol}** had a peak volume of {max_volumes[highest_max_vol]:,.0f} shares.")
 
             # Volatility Insights
             st.markdown("### Stock Volatility (Annualized)")
             df_all['Daily_Return'] = df_all.groupby('Company')['Close'].pct_change()
             volatilities = (df_all.groupby('Company')['Daily_Return'].std() * (252 ** 0.5)).sort_values(ascending=False)
             volatilities_dict = volatilities.to_dict()
-            explanation_volatility = get_llm_explanation("Annualized Stock Volatility", volatilities_dict)
+            explanation_volatility = get_llm_explanation("Annualized Volatility", volatilities_dict)
             if explanation_volatility:
                 st.write(explanation_volatility)
             else:
-                # Fallback to rule-based explanation
-                st.write("Volatility measures how much a stock’s price fluctuates, indicating risk. Higher values mean larger price swings (higher risk/reward). Calculated from daily returns, annualized.")
-                st.write("Annualized Volatility:")
+                st.write("Volatility measures price fluctuations (risk):")
                 for company, vol in volatilities.items():
                     st.write(f"- **{company}**: {vol:.2%} volatility.")
                 highest_vol = volatilities.idxmax()
-                st.write(f"**{highest_vol}** has the highest volatility, making it a riskier but potentially more rewarding investment compared to steadier stocks.")
+                st.write(f"**{highest_vol}** had the highest volatility, indicating higher risk.")
             
             # Volatility Chart
             volatility_df = pd.DataFrame({
@@ -255,24 +273,22 @@ def main():
             df_all['Above_MA50'] = df_all['Close'] > df_all['MA50']
             ma_trends = df_all.groupby('Company')['Above_MA50'].mean() * 100
             ma_trends_dict = ma_trends.to_dict()
-            explanation_ma = get_llm_explanation("Percentage of Days Above 50-Day Moving Average", ma_trends_dict)
+            explanation_ma = get_llm_explanation("Days Above 50-Day MA (%)", ma_trends_dict)
             if explanation_ma:
                 st.write(explanation_ma)
             else:
-                # Fallback to rule-based explanation
-                st.write("This section shows the percentage of days each stock’s closing price was above its 50-day moving average, indicating bullish (above) or bearish (below) trends. A higher percentage suggests stronger upward momentum.")
-                st.write("Percentage of Days Above 50-Day Moving Average:")
+                st.write("This section shows the percentage of days above the 50-day moving average:")
                 for company, pct in ma_trends.sort_values(ascending=False).items():
                     st.write(f"- **{company}**: {pct:.2f}% of days.")
                 strongest_trend = ma_trends.idxmax()
                 weakest_trend = ma_trends.idxmin()
-                st.write(f"**{strongest_trend}** spent the most time above its 50-day moving average, indicating the strongest bullish trend.")
-                st.write(f"**{weakest_trend}** spent the least time above its moving average, suggesting weaker momentum or a bearish trend.")
+                st.write(f"**{strongest_trend}** had the strongest bullish trend.")
+                st.write(f"**{weakest_trend}** had the weakest trend.")
                 if 'LBS Bina' in ma_trends:
                     base_ma = ma_trends['LBS Bina']
                     avg_ma = ma_trends.mean()
                     trend_note = "stronger" if base_ma > avg_ma else "weaker" if base_ma < avg_ma else "similar"
-                    st.write(f"LBS Bina ({base_ma:.2f}%) had a {trend_note} trend compared to the group average ({avg_ma:.2f}%).")
+                    st.write(f"LBS Bina ({base_ma:.2f}%) had a {trend_note} trend vs. average ({avg_ma:.2f}%).")
             
             # Moving Average Trends Chart
             ma_trends_df = pd.DataFrame({
@@ -299,24 +315,22 @@ def main():
             drawdowns = (df_pivot - rolling_max) / rolling_max
             max_drawdowns = (-drawdowns.min() * 100).sort_values(ascending=False)
             max_drawdowns_dict = max_drawdowns.to_dict()
-            explanation_drawdown = get_llm_explanation("Maximum Drawdown", max_drawdowns_dict)
+            explanation_drawdown = get_llm_explanation("Maximum Drawdown (%)", max_drawdowns_dict)
             if explanation_drawdown:
                 st.write(explanation_drawdown)
             else:
-                # Fallback to rule-based explanation
-                st.write("This section measures the largest percentage drop from a peak price to a trough for each stock, showing downside risk. Larger drawdowns indicate higher risk of significant losses.")
-                st.write("Maximum Drawdown Over the Period:")
+                st.write("Maximum drawdown measures the largest price drop from a peak:")
                 for company, drawdown in max_drawdowns.items():
-                    st.write(f"- **{company}**: {drawdown:.2f}% maximum loss.")
+                    st.write(f"- **{company}**: {drawdown:.2f}% max loss.")
                 highest_drawdown = max_drawdowns.idxmax()
                 lowest_drawdown = max_drawdowns.idxmin()
-                st.write(f"**{highest_drawdown}** had the largest drawdown, indicating the highest risk of significant price drops.")
-                st.write(f"**{lowest_drawdown}** had the smallest drawdown, suggesting greater price stability.")
+                st.write(f"**{highest_drawdown}** had the largest drawdown (highest risk).")
+                st.write(f"**{lowest_drawdown}** had the smallest drawdown (more stable).")
                 if 'LBS Bina' in max_drawdowns:
                     base_drawdown = max_drawdowns['LBS Bina']
                     avg_drawdown = max_drawdowns.mean()
                     risk_note = "riskier" if base_drawdown > avg_drawdown else "safer" if base_drawdown < avg_drawdown else "similar"
-                    st.write(f"LBS Bina’s drawdown ({base_drawdown:.2f}%) was {risk_note} compared to the group average ({avg_drawdown:.2f}%).")
+                    st.write(f"LBS Bina ({base_drawdown:.2f}%) was {risk_note} vs. average ({avg_drawdown:.2f}%).")
             
             # Maximum Drawdown Chart
             drawdown_df = pd.DataFrame({
@@ -340,25 +354,23 @@ def main():
             st.markdown("### Average Daily Returns")
             avg_daily_returns = (df_all.groupby('Company')['Daily_Return'].mean() * 100).sort_values(ascending=False)
             avg_daily_returns_dict = avg_daily_returns.to_dict()
-            explanation_returns = get_llm_explanation("Average Daily Returns", avg_daily_returns_dict)
+            explanation_returns = get_llm_explanation("Average Daily Returns (%)", avg_daily_returns_dict)
             if explanation_returns:
                 st.write(explanation_returns)
             else:
-                # Fallback to rule-based explanation
-                st.write("This section shows the average daily percentage return for each stock, indicating typical daily performance. Positive values suggest consistent daily gains, while negative values indicate losses.")
-                st.write("Average Daily Returns:")
+                st.write("Average daily returns show typical daily performance:")
                 for company, ret in avg_daily_returns.items():
                     direction = "gain" if ret > 0 else "loss"
-                    st.write(f"- **{company}**: {ret:.4f}% {direction} per day.")
+                    st.write(f"- **{company}**: {ret:.4f}% {direction}/day.")
                 highest_daily = avg_daily_returns.idxmax()
                 lowest_daily = avg_daily_returns.idxmin()
-                st.write(f"**{highest_daily}** had the highest average daily return, showing consistent daily gains.")
-                st.write(f"**{lowest_daily}** had the lowest average daily return, indicating weaker daily performance.")
+                st.write(f"**{highest_daily}** had the highest daily returns.")
+                st.write(f"**{lowest_daily}** had the lowest daily returns.")
                 if 'LBS Bina' in avg_daily_returns:
                     base_daily = avg_daily_returns['LBS Bina']
                     avg_daily = avg_daily_returns.mean()
                     daily_note = "stronger" if base_daily > avg_daily else "weaker" if base_daily < avg_daily else "similar"
-                    st.write(f"LBS Bina’s average daily return ({base_daily:.4f}%) was {daily_note} compared to the group average ({avg_daily:.4f}%).")
+                    st.write(f"LBS Bina ({base_daily:.4f}%) was {daily_note} vs. average ({avg_daily:.4f}%).")
             
             # Average Daily Returns Chart
             returns_df = pd.DataFrame({
