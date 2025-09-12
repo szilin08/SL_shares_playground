@@ -9,6 +9,12 @@ from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
+tokenizer = AutoTokenizer.from_pretrained("distilgpt2")
+model = AutoModelForCausalLM.from_pretrained("distilgpt2")
+tokenizer.pad_token = tokenizer.eos_token  # Avoid the warning
+
+generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
+
 @st.cache_resource
 def load_generator():
     try:
@@ -208,6 +214,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
