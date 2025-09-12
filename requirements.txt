@@ -1,7 +1,6 @@
-pip==25.2
-streamlit==1.39.0
-pandas==2.2.3
-yfinance==0.2.44
-plotly==5.24.1
-transformers==4.44.2
-torch==2.4.1
+torch>=2.1.0
+transformers>=4.40.0
+yfinance
+plotly
+pandas
+streamlit
