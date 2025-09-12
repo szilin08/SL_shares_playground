@@ -6,6 +6,8 @@ import plotly.express as px
 from transformers import pipeline
 from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
 # Cache the model to avoid reloading
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 
 @st.cache_resource
 def load_generator():
@@ -206,5 +208,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
