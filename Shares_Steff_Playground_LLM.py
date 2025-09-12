@@ -4,10 +4,8 @@ import yfinance as yf
 from datetime import date
 import plotly.express as px
 from transformers import pipeline
-
-# Cache the model to avoid reloading
-@st.cache_resource
 from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
+# Cache the model to avoid reloading
 
 @st.cache_resource
 def load_generator():
@@ -208,4 +206,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
