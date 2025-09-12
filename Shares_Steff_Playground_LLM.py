@@ -19,7 +19,7 @@ def fetch_data(ticker, start, end):
     return yf.Ticker(ticker).history(start=start, end=end)
 
 # Generate AI explanation
-def generate_gpt2_explanation(prompt, max_new_tokens=150):  # Reduced for memory efficiency
+def generate_gpt2_explanation(prompt, max_new_tokens=100):  # Reduced for memory
     generator = load_generator()
     if generator is None:
         return "Unable to generate explanation due to model loading error."
@@ -97,12 +97,11 @@ def main():
             last_closes = df_all.groupby('Company')['Close'].last()
             pct_changes = ((last_closes - first_closes) / first_closes * 100).sort_values(ascending=False)
             prompt_close = (
-                f"Analyze the stock performance of companies including LBS Bina and its competitors. "
-                f"The percentage changes in closing prices from {start} to {end} are: "
-                f"{', '.join([f'{comp}: {pct:.2f}%' for comp, pct in pct_changes.items()])}. "
-                f"The top performer is {pct_changes.idxmax()} with {pct_changes.max():.2f}% gain, "
-                f"and the weakest is {pct_changes.idxmin()} with {pct_changes.min():.2f}% change. "
-                f"Explain these trends in simple terms, focusing on what the percentage changes mean for investors."
+                f"Analyze stock performance for LBS Bina and competitors from {start} to {end}. "
+                f"Percentage changes in closing prices: {', '.join([f'{comp}: {pct:.2f}%' for comp, pct in pct_changes.items()])}. "
+                f"Top performer: {pct_changes.idxmax()} ({pct_changes.max():.2f}%). "
+                f"Weakest performer: {pct_changes.idxmin()} ({pct_changes.min():.2f}%). "
+                f"Explain these trends simply for investors."
             )
             st.write(generate_gpt2_explanation(prompt_close))
 
@@ -110,10 +109,11 @@ def main():
             avg_volumes = df_all.groupby('Company')['Volume'].mean().sort_values(ascending=False)
             max_volumes = df_all.groupby('Company')['Volume'].max()
             prompt_volume = (
-                f"Explain the trading volume trends for stocks including LBS Bina and its competitors. "
-                f"Average daily volumes are: {', '.join([f'{comp}: {vol:,.0f} shares' for comp, vol in avg_volumes.items()])}. "
-                f"The highest average volume is {avg_volumes.idxmax()} and the largest single-day volume spike was for {max_volumes.idxmax()} at {max_volumes[max_volumes.idxmax]:,.0f} shares. "
-                f"Describe what trading volume indicates about investor interest and market activity."
+                f"Explain trading volume trends for LBS Bina and competitors. "
+                f"Average daily volumes: {', '.join([f'{comp}: {vol:,.0f} shares' for comp, vol in avg_volumes.items()])}. "
+                f"Highest average volume: {avg_volumes.idxmax()}. "
+                f"Largest single-day volume: {max_volumes.idxmax()} ({max_volumes[max_volumes.idxmax]:,.0f} shares). "
+                f"Describe what volume indicates about investor interest."
             )
             st.write(generate_gpt2_explanation(prompt_volume))
 
@@ -121,9 +121,10 @@ def main():
             df_all['Daily_Return'] = df_all.groupby('Company')['Close'].pct_change()
             volatilities = (df_all.groupby('Company')['Daily_Return'].std() * (252 ** 0.5)).sort_values(ascending=False)
             prompt_volatility = (
-                f"Explain stock volatility for companies including LBS Bina and its competitors. "
-                f"Annualized volatilities are: {', '.join([f'{comp}: {vol:.2%}' for comp, vol in volatilities.items()])}. "
-                f"The highest volatility is {volatilities.idxmax()}. Describe what volatility means for investors and the risks involved."
+                f"Explain stock volatility for LBS Bina and competitors. "
+                f"Annualized volatilities: {', '.join([f'{comp}: {vol:.2%}' for comp, vol in volatilities.items()])}. "
+                f"Highest volatility: {volatilities.idxmax()}. "
+                f"Describe what volatility means for investors and risks."
             )
             st.write(generate_gpt2_explanation(prompt_volatility))
 
@@ -140,10 +141,10 @@ def main():
             df_all['Above_MA50'] = df_all['Close'] > df_all['MA50']
             ma_trends = df_all.groupby('Company')['Above_MA50'].mean() * 100
             prompt_ma = (
-                f"Analyze the 50-day moving average trends for stocks including LBS Bina and its competitors. "
-                f"The percentage of days above the 50-day moving average are: {', '.join([f'{comp}: {pct:.2f}%' for comp, pct in ma_trends.sort_values(ascending=False).items()])}. "
-                f"The strongest trend is {ma_trends.idxmax()} and the weakest is {ma_trends.idxmin()}. "
-                f"Explain what the moving average trend indicates about stock momentum."
+                f"Analyze 50-day moving average trends for LBS Bina and competitors. "
+                f"Percentage of days above 50-day MA: {', '.join([f'{comp}: {pct:.2f}%' for comp, pct in ma_trends.sort_values(ascending=False).items()])}. "
+                f"Strongest trend: {ma_trends.idxmax()}. Weakest: {ma_trends.idxmin()}. "
+                f"Explain what this indicates about stock momentum."
             )
             st.write(generate_gpt2_explanation(prompt_ma))
 
@@ -161,10 +162,10 @@ def main():
             drawdowns = (df_pivot - rolling_max) / rolling_max
             max_drawdowns = (-drawdowns.min() * 100).sort_values(ascending=False)
             prompt_drawdown = (
-                f"Explain the maximum drawdown for stocks including LBS Bina and its competitors. "
-                f"Maximum drawdowns are: {', '.join([f'{comp}: {drawdown:.2f}%' for comp, drawdown in max_drawdowns.items()])}. "
-                f"The largest drawdown is {max_drawdowns.idxmax()} and the smallest is {max_drawdowns.idxmin()}. "
-                f"Describe what maximum drawdown means for investors and the risks it highlights."
+                f"Explain maximum drawdown for LBS Bina and competitors. "
+                f"Drawdowns: {', '.join([f'{comp}: {drawdown:.2f}%' for comp, drawdown in max_drawdowns.items()])}. "
+                f"Largest: {max_drawdowns.idxmax()}. Smallest: {max_drawdowns.idxmin()}. "
+                f"Describe what drawdown means for investors and risks."
             )
             st.write(generate_gpt2_explanation(prompt_drawdown))
 
@@ -179,10 +180,10 @@ def main():
             st.markdown("### Average Daily Returns")
             avg_daily_returns = (df_all.groupby('Company')['Daily_Return'].mean() * 100).sort_values(ascending=False)
             prompt_returns = (
-                f"Explain the average daily returns for stocks including LBS Bina and its competitors. "
-                f"Average daily returns are: {', '.join([f'{comp}: {ret:.4f}%' for comp, ret in avg_daily_returns.items()])}. "
-                f"The highest is {avg_daily_returns.idxmax()} and the lowest is {avg_daily_returns.idxmin()}. "
-                f"Explain what average daily returns indicate about stock performance."
+                f"Explain average daily returns for LBS Bina and competitors. "
+                f"Returns: {', '.join([f'{comp}: {ret:.4f}%' for comp, ret in avg_daily_returns.items()])}. "
+                f"Highest: {avg_daily_returns.idxmax()}. Lowest: {avg_daily_returns.idxmin()}. "
+                f"Explain what daily returns indicate about performance."
             )
             st.write(generate_gpt2_explanation(prompt_returns))
 
