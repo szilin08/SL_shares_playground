@@ -4,4 +4,5 @@ pandas
 matplotlib
 plotly
 transformers
-torch
+torch==2.4.1
+
