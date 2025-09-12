@@ -7,12 +7,20 @@ from transformers import pipeline
 
 # Cache the model to avoid reloading
 @st.cache_resource
+from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
+
+@st.cache_resource
 def load_generator():
     try:
-        return pipeline('text-generation', model='distilgpt2', device=-1)  # Force CPU
+        tokenizer = AutoTokenizer.from_pretrained("distilgpt2")
+        model = AutoModelForCausalLM.from_pretrained("distilgpt2")
+        # Set pad_token_id explicitly
+        model.config.pad_token_id = tokenizer.eos_token_id
+        return pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
     except Exception as e:
         st.error(f"Error loading GPT-2 model: {e}")
         return None
+
 
 # Fetch data function
 def fetch_data(ticker, start, end):
@@ -200,3 +208,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
