@@ -4,4 +4,4 @@ pandas
 matplotlib
 plotly
 transformers
-
+torch
